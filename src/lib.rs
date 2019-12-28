@@ -316,9 +316,7 @@ async fn handle_connection(mut streama: Arc<TcpStream>, web: Arc<Web>) -> AsyncM
                 stream.push_str("text/html; charset=utf-8");
                 stream.push_str("\r\n\r\n");
             }
-            unsafe {
-                Pin::new_unchecked(request.1(streamb)).await;
-            }
+            Pin::from(request.1(streamb)).await;
         } else if let Ok(contents) = std::fs::read_to_string(page) {
             let stream = Arc::get_mut(&mut streamb).unwrap();
             stream.push_str("HTTP/1.1 200 OK\nContent-Type: ");
