@@ -6,13 +6,11 @@ use std::task::Poll;
 use std::task::Context;
 use std::pin::Pin;
 use std::collections::HashMap;
-use std::path::Path;
 
 use pasts;
 use async_std;
 
 use async_std::prelude::*;
-use async_std::io::prelude::*;
 use async_std::net::TcpStream;
 
 // Asynchronous message for passing between tasks on this thread.
@@ -186,14 +184,14 @@ async fn async_main(web: Arc<Web>) {
     }
 }
 
-pub type ResourceGenerator = fn(stream: &mut Stream) -> Box<dyn Future<Output = ()> + Send>;
+pub type ResourceGenerator = fn(stream: Arc<Stream>) -> Box<dyn Future<Output = ()> + Send>;
 
 /// Start the webserver.
 /// - `path`: Path to static resources.
 /// - `urls`: URLs to generated resources.
-pub fn start<P: AsRef<Path>, W: Write + Unpin>(
+pub fn start(
     path: &'static str,
-    urls: HashMap<&'static str, ResourceGenerator>
+    urls: HashMap<&'static str, (&'static str, ResourceGenerator)>
 ) {
     let web = Arc::new(Web {
         path, urls
@@ -204,20 +202,23 @@ pub fn start<P: AsRef<Path>, W: Write + Unpin>(
 
 struct Web {
     path: &'static str,
-    urls: HashMap<&'static str, ResourceGenerator>,
+    urls: HashMap<&'static str, (&'static str, ResourceGenerator)>,
 }
 
 /// An HTTP Stream.
-pub struct Stream<'a> {
-    stream: &'a mut TcpStream,
+pub struct Stream {
+    stream: Arc<TcpStream>,
     output: Vec<u8>,
 }
 
-impl<'a> Stream<'a> {
+impl Stream {
     /// Try to send an HTTP packet.  May fail if disconnected to client.
     pub async fn send(&mut self) -> Result<(), std::io::Error> {
-        self.stream.write(&self.output).await?;
-        self.stream.flush().await?;
+        let stream = Arc::get_mut(&mut self.stream).unwrap();
+
+        stream.write(&self.output).await?;
+        stream.flush().await?;
+
         Ok(())
     }
 
@@ -237,9 +238,9 @@ enum Message {
     Terminate,
 }
 
-async fn handle_connection(mut stream: Arc<TcpStream>, web: Arc<Web>) -> AsyncMsg {
+async fn handle_connection(mut streama: Arc<TcpStream>, web: Arc<Web>) -> AsyncMsg {
     // Should be O.k, only one instance of this Arc.
-    let stream = Arc::get_mut(&mut stream).unwrap();
+    let stream = Arc::get_mut(&mut streama).unwrap();
 
     let mut buffer = [0; 512];
     stream.read(&mut buffer).await.unwrap();
@@ -269,7 +270,7 @@ async fn handle_connection(mut stream: Arc<TcpStream>, web: Arc<Web>) -> AsyncMs
         return AsyncMsg::OldTask;
     }
 
-    let mut stream = Stream { stream, output: vec![] };
+    let mut streamb = Arc::new(Stream { stream: streama, output: vec![] });
 
     let path = if let Ok(path) = std::str::from_utf8(path) {
         path
@@ -278,14 +279,15 @@ async fn handle_connection(mut stream: Arc<TcpStream>, web: Arc<Web>) -> AsyncMs
         return AsyncMsg::OldTask;
     };
 
-    let mut index = path.to_string();
-    index.push_str("index.html");
+    let mut index = web.path.to_string();
+    index.push_str("/index.html");
 
-    let mut e404 = path.to_string();
-    e404.push_str("404.html");
+    let mut e404 = web.path.to_string();
+    e404.push_str("/404.html");
 
     //
     if "/" == path {
+        let stream = Arc::get_mut(&mut streamb).unwrap();
         if let Ok(contents) = std::fs::read_to_string(index) {
             stream.push_str("HTTP/1.1 200 OK\nContent-Type: ");
             stream.push_str("text/html; charset=utf-8");
@@ -304,23 +306,28 @@ async fn handle_connection(mut stream: Arc<TcpStream>, web: Arc<Web>) -> AsyncMs
             stream.send().await.unwrap();
         }
     } else {
-        let mut page = path.to_string();
+        let mut page = web.path.to_string();
         page.push_str(path);
 
         if let Some(request) = web.urls.get(page.as_str()) {
-            stream.push_str("HTTP/1.1 200 OK\nContent-Type: ");
-            stream.push_str("text/html; charset=utf-8");
-            stream.push_str("\r\n\r\n");
-            unsafe {
-                Pin::new_unchecked(request(&mut stream)).await;
+            {
+                let stream = Arc::get_mut(&mut streamb).unwrap();
+                stream.push_str("HTTP/1.1 200 OK\nContent-Type: ");
+                stream.push_str("text/html; charset=utf-8");
+                stream.push_str("\r\n\r\n");
             }
-        } else if let Ok(contents) = std::fs::read_to_string(path) {
+            unsafe {
+                Pin::new_unchecked(request.1(Arc::clone(&streamb))).await;
+            }
+        } else if let Ok(contents) = std::fs::read_to_string(page) {
+            let stream = Arc::get_mut(&mut streamb).unwrap();
             stream.push_str("HTTP/1.1 200 OK\nContent-Type: ");
             stream.push_str("text/html; charset=utf-8");
             stream.push_str("\r\n\r\n");
             stream.push_str(&contents);
             stream.send().await.unwrap();
         } else {
+            let stream = Arc::get_mut(&mut streamb).unwrap();
             stream.push_str("HTTP/1.1 404 NOT FOUND\nContent-Type: ");
             stream.push_str("text/html; charset=utf-8");
             stream.push_str("\r\n\r\n");
