@@ -311,7 +311,7 @@ async fn handle_connection(mut streama: Arc<TcpStream>, web: Arc<Web>) -> AsyncM
         if let Some(request) = web.urls.get(path) {
             {
                 streamb.push_str("HTTP/1.1 200 OK\nContent-Type: ");
-                streamb.push_str("text/html; charset=utf-8");
+                streamb.push_str(request.0);
                 streamb.push_str("\r\n\r\n");
             }
             Pin::from(request.1(streamb)).await;
