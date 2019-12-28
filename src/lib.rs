@@ -186,18 +186,31 @@ async fn async_main(web: Arc<Web>) {
 
 pub type ResourceGenerator = fn(stream: Stream) -> Box<dyn Future<Output = ()> + Send>;
 
-/// Start the webserver.
-/// - `path`: Path to static resources.
-/// - `urls`: URLs to generated resources.
-pub fn start(
-    path: &'static str,
-    urls: HashMap<&'static str, (&'static str, ResourceGenerator)>
-) {
-    let web = Arc::new(Web {
-        path, urls
-    });
+/// A webserver.
+pub struct WebServer {
+    web: Web,
+}
 
-    <pasts::ThreadInterrupt as pasts::Interrupt>::block_on(async_main(web));
+impl WebServer {
+    /// Create a new Webserver with a path to the static resources.
+    pub fn with_resources(path: &'static str) -> WebServer {
+        let urls = HashMap::new();
+
+        WebServer { web: Web { path, urls } }
+    }
+
+    /// Add an async function for a URL.
+    pub fn url(mut self, url: &'static str, func: ResourceGenerator) -> Self {
+        self.web.urls.insert(url, ("text/html; charset=utf-8", func));
+        self
+    }
+
+    // FIXME: Maybe return a Future, so it can be interrupted w/ stdin asynchronously
+    /// Start the webserver.
+    pub fn start(self) {
+        let web = Arc::new(self.web);
+        <pasts::ThreadInterrupt as pasts::Interrupt>::block_on(async_main(web));
+    }
 }
 
 struct Web {
@@ -212,7 +225,8 @@ pub struct Stream {
 }
 
 impl Stream {
-    /// Try to send an HTTP packet.  May fail if disconnected to client.
+    /// Try to send all data in the stream as HTTP.  May fail if disconnected to
+    /// client.
     pub async fn send(&mut self) -> Result<(), std::io::Error> {
         let stream = Arc::get_mut(&mut self.stream).unwrap();
 
@@ -228,7 +242,7 @@ impl Stream {
     }
 
     /// Push bytes into the stream.
-    pub fn push_u8(&mut self, bytes: &[u8]) {
+    pub fn push_data(&mut self, bytes: &[u8]) {
         self.output.extend(bytes);
     }
 }

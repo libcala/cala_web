@@ -1,7 +1,7 @@
-use std::collections::HashMap;
 use std::future::Future;
+use cala_web::{WebServer, Stream};
 
-fn request(stream: cala_web::Stream) -> Box<dyn Future<Output = ()> + Send> {
+fn request(stream: Stream) -> Box<dyn Future<Output = ()> + Send> {
     Box::new(async {
         let mut stream = stream;
 
@@ -11,8 +11,7 @@ fn request(stream: cala_web::Stream) -> Box<dyn Future<Output = ()> + Send> {
 }
 
 fn main() {
-    let mut map = HashMap::<&str, (&str, cala_web::ResourceGenerator)>::new();
-    map.insert("/gen", ("text/html; charset=utf-8", request));
-
-    cala_web::start("examples/serve", map);
+    WebServer::with_resources("examples/serve")
+        .url("/gen", request)
+        .start()
 }
