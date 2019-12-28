@@ -184,7 +184,7 @@ async fn async_main(web: Arc<Web>) {
     }
 }
 
-pub type ResourceGenerator = fn(stream: Arc<Stream>) -> Box<dyn Future<Output = ()> + Send>;
+pub type ResourceGenerator = fn(stream: Stream) -> Box<dyn Future<Output = ()> + Send>;
 
 /// Start the webserver.
 /// - `path`: Path to static resources.
@@ -270,7 +270,7 @@ async fn handle_connection(mut streama: Arc<TcpStream>, web: Arc<Web>) -> AsyncM
         return AsyncMsg::OldTask;
     }
 
-    let mut streamb = Arc::new(Stream { stream: streama, output: vec![] });
+    let mut streamb = Stream { stream: streama, output: vec![] };
 
     let path = if let Ok(path) = std::str::from_utf8(path) {
         path
@@ -287,23 +287,22 @@ async fn handle_connection(mut streama: Arc<TcpStream>, web: Arc<Web>) -> AsyncM
 
     // FIXME: Less redundant.
     if "/" == path {
-        let stream = Arc::get_mut(&mut streamb).unwrap();
         if let Ok(contents) = std::fs::read_to_string(index) {
-            stream.push_str("HTTP/1.1 200 OK\nContent-Type: ");
-            stream.push_str("text/html; charset=utf-8");
-            stream.push_str("\r\n\r\n");
-            stream.push_str(&contents);
-            stream.send().await.unwrap();
+            streamb.push_str("HTTP/1.1 200 OK\nContent-Type: ");
+            streamb.push_str("text/html; charset=utf-8");
+            streamb.push_str("\r\n\r\n");
+            streamb.push_str(&contents);
+            streamb.send().await.unwrap();
         } else {
-            stream.push_str("HTTP/1.1 404 NOT FOUND\nContent-Type: ");
-            stream.push_str("text/html; charset=utf-8");
-            stream.push_str("\r\n\r\n");
+            streamb.push_str("HTTP/1.1 404 NOT FOUND\nContent-Type: ");
+            streamb.push_str("text/html; charset=utf-8");
+            streamb.push_str("\r\n\r\n");
             if let Ok(cs) = std::fs::read_to_string(e404) {
-                stream.push_str(&cs);
+                streamb.push_str(&cs);
             } else {
-                stream.push_str("404 NOT FOUND");
+                streamb.push_str("404 NOT FOUND");
             };
-            stream.send().await.unwrap();
+            streamb.send().await.unwrap();
         }
     } else {
         let mut page = web.path.to_string();
@@ -311,30 +310,27 @@ async fn handle_connection(mut streama: Arc<TcpStream>, web: Arc<Web>) -> AsyncM
 
         if let Some(request) = web.urls.get(path) {
             {
-                let stream = Arc::get_mut(&mut streamb).unwrap();
-                stream.push_str("HTTP/1.1 200 OK\nContent-Type: ");
-                stream.push_str("text/html; charset=utf-8");
-                stream.push_str("\r\n\r\n");
+                streamb.push_str("HTTP/1.1 200 OK\nContent-Type: ");
+                streamb.push_str("text/html; charset=utf-8");
+                streamb.push_str("\r\n\r\n");
             }
             Pin::from(request.1(streamb)).await;
         } else if let Ok(contents) = std::fs::read_to_string(page) {
-            let stream = Arc::get_mut(&mut streamb).unwrap();
-            stream.push_str("HTTP/1.1 200 OK\nContent-Type: ");
-            stream.push_str("text/html; charset=utf-8");
-            stream.push_str("\r\n\r\n");
-            stream.push_str(&contents);
-            stream.send().await.unwrap();
+            streamb.push_str("HTTP/1.1 200 OK\nContent-Type: ");
+            streamb.push_str("text/html; charset=utf-8");
+            streamb.push_str("\r\n\r\n");
+            streamb.push_str(&contents);
+            streamb.send().await.unwrap();
         } else {
-            let stream = Arc::get_mut(&mut streamb).unwrap();
-            stream.push_str("HTTP/1.1 404 NOT FOUND\nContent-Type: ");
-            stream.push_str("text/html; charset=utf-8");
-            stream.push_str("\r\n\r\n");
+            streamb.push_str("HTTP/1.1 404 NOT FOUND\nContent-Type: ");
+            streamb.push_str("text/html; charset=utf-8");
+            streamb.push_str("\r\n\r\n");
             if let Ok(cs) = std::fs::read_to_string(e404) {
-                stream.push_str(&cs);
+                streamb.push_str(&cs);
             } else {
-                stream.push_str("404 NOT FOUND");
+                streamb.push_str("404 NOT FOUND");
             };
-            stream.send().await.unwrap();
+            streamb.send().await.unwrap();
         }
     };
 

@@ -1,11 +1,9 @@
 use std::collections::HashMap;
 use std::future::Future;
-use std::sync::Arc;
 
-fn request(stream: Arc<cala_web::Stream>) -> Box<dyn Future<Output = ()> + Send> {
+fn request(stream: cala_web::Stream) -> Box<dyn Future<Output = ()> + Send> {
     Box::new(async {
         let mut stream = stream;
-        let stream = Arc::get_mut(&mut stream).unwrap();
 
         stream.push_str("This page is not from a file.");
         stream.send().await.unwrap();
