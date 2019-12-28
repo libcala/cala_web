@@ -309,7 +309,7 @@ async fn handle_connection(mut streama: Arc<TcpStream>, web: Arc<Web>) -> AsyncM
         let mut page = web.path.to_string();
         page.push_str(path);
 
-        if let Some(request) = web.urls.get(page.as_str()) {
+        if let Some(request) = web.urls.get(path) {
             {
                 let stream = Arc::get_mut(&mut streamb).unwrap();
                 stream.push_str("HTTP/1.1 200 OK\nContent-Type: ");
@@ -317,7 +317,7 @@ async fn handle_connection(mut streama: Arc<TcpStream>, web: Arc<Web>) -> AsyncM
                 stream.push_str("\r\n\r\n");
             }
             unsafe {
-                Pin::new_unchecked(request.1(Arc::clone(&streamb))).await;
+                Pin::new_unchecked(request.1(streamb)).await;
             }
         } else if let Ok(contents) = std::fs::read_to_string(page) {
             let stream = Arc::get_mut(&mut streamb).unwrap();
