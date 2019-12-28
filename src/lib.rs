@@ -285,7 +285,7 @@ async fn handle_connection(mut streama: Arc<TcpStream>, web: Arc<Web>) -> AsyncM
     let mut e404 = web.path.to_string();
     e404.push_str("/404.html");
 
-    //
+    // FIXME: Less redundant.
     if "/" == path {
         let stream = Arc::get_mut(&mut streamb).unwrap();
         if let Ok(contents) = std::fs::read_to_string(index) {
