@@ -184,7 +184,7 @@ async fn async_main(web: Arc<Web>) {
     }
 }
 
-pub type ResourceGenerator = fn(stream: Stream) -> Box<dyn Future<Output = ()> + Send>;
+type ResourceGenerator = Box<dyn Fn(Stream) -> Box<dyn Future<Output = ()> + Send> + Send + Sync>;
 
 /// A webserver.
 pub struct WebServer {
@@ -200,8 +200,13 @@ impl WebServer {
     }
 
     /// Add an async function for a URL.
-    pub fn url(mut self, url: &'static str, func: ResourceGenerator) -> Self {
-        self.web.urls.insert(url, ("text/html; charset=utf-8", func));
+    pub fn url<F: 'static, G: 'static>(mut self, url: &'static str, func: G)
+        -> Self
+        where F: Future<Output = ()> + Send, G: Fn(Stream) -> F + Sync + Send
+    {
+        self.web.urls.insert(url, ("text/html; charset=utf-8", Box::new(
+            move |stream| Box::new(func(stream))
+        )));
         self
     }
 
