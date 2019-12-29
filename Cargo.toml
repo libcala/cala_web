@@ -1,5 +1,5 @@
 [package]
-name = "cala-web"
+name = "cala_web"
 version = "0.0.1"
 authors = ["Jeron Aldaron Lau <jeronlau@plopgrizzly.com>"]
 edition = "2018"

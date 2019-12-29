@@ -212,6 +212,21 @@ impl WebServer {
         self
     }
 
+    /// Add an async function for a URL.
+    pub fn url_with_type<F: 'static, G: 'static>(
+        mut self,
+        url: &'static str,
+        func: G,
+        content_type: &'static str)
+        -> Self
+        where F: Future<Output = Result<(), std::io::Error>> + Send, G: Fn(Stream) -> F + Sync + Send
+    {
+        self.web.urls.insert(url, (content_type, Box::new(
+            move |stream| Box::new(func(stream))
+        )));
+        self
+    }
+
     // FIXME: Maybe return a Future, so it can be interrupted w/ stdin asynchronously
     /// Start the webserver.
     pub fn start(self) {
