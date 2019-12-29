@@ -6,6 +6,7 @@ use std::task::Poll;
 use std::task::Context;
 use std::pin::Pin;
 use std::collections::HashMap;
+use std::cell::Cell;
 
 use pasts;
 use async_std;
@@ -223,13 +224,51 @@ struct Web {
     urls: HashMap<&'static str, (&'static str, ResourceGenerator)>,
 }
 
+unsafe impl Sync for Stream {}
+
 /// An HTTP Stream.
 pub struct Stream {
+    internal: Cell<Option<InternalStream>>
+}
+
+impl Stream {
+    /// Try to send all data in the stream as HTTP.  May fail if disconnected to
+    /// client.
+    pub async fn send(&self) -> Result<(), std::io::Error> {
+        let mut this = self.internal.take().unwrap();
+
+        let ret = this.send().await;
+
+        self.internal.set(Some(this));
+
+        ret
+    }
+
+    /// Push UTF-8 text into the stream.
+    pub fn push_str(&self, text: &str) {
+        let mut this = self.internal.take().unwrap();
+
+        this.push_str(text);
+
+        self.internal.set(Some(this));
+    }
+
+    /// Push bytes into the stream.
+    pub fn push_data(&self, bytes: &[u8]) {
+        let mut this = self.internal.take().unwrap();
+
+        this.push_data(bytes);
+
+        self.internal.set(Some(this));
+    }
+}
+
+struct InternalStream {
     stream: Arc<TcpStream>,
     output: Vec<u8>,
 }
 
-impl Stream {
+impl InternalStream {
     /// Try to send all data in the stream as HTTP.  May fail if disconnected to
     /// client.
     pub async fn send(&mut self) -> Result<(), std::io::Error> {
@@ -289,7 +328,7 @@ async fn handle_connection(mut streama: Arc<TcpStream>, web: Arc<Web>) -> AsyncM
         return AsyncMsg::OldTask;
     }
 
-    let mut streamb = Stream { stream: streama, output: vec![] };
+    let mut streamb = InternalStream { stream: streama, output: vec![] };
 
     let path = if let Ok(path) = std::str::from_utf8(path) {
         path
@@ -333,7 +372,7 @@ async fn handle_connection(mut streama: Arc<TcpStream>, web: Arc<Web>) -> AsyncM
                 streamb.push_str(request.0);
                 streamb.push_str("\r\n\r\n");
             }
-            Pin::from(request.1(streamb)).await;
+            Pin::from(request.1(Stream { internal: Cell::new(Some(streamb)) })).await;
         } else if let Ok(contents) = std::fs::read_to_string(page) {
             streamb.push_str("HTTP/1.1 200 OK\nContent-Type: ");
             streamb.push_str("text/html; charset=utf-8");

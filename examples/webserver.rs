@@ -1,7 +1,6 @@
 use cala_web::{WebServer, Stream};
 
-// FIXME: stream not mut
-async fn request(mut stream: Stream) {
+async fn request(stream: Stream) {
     stream.push_str("This page is not from a file.");
     stream.send().await.unwrap();
 }
