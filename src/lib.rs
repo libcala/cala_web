@@ -7,6 +7,7 @@ use std::task::Context;
 use std::pin::Pin;
 use std::collections::HashMap;
 use std::cell::Cell;
+use std::io::Error;
 
 use pasts;
 use async_std;
@@ -185,7 +186,7 @@ async fn async_main(web: Arc<Web>) {
     }
 }
 
-type ResourceGenerator = Box<dyn Fn(Stream) -> Box<dyn Future<Output = ()> + Send> + Send + Sync>;
+type ResourceGenerator = Box<dyn Fn(Stream) -> Box<dyn Future<Output = Result<(), Error>> + Send> + Send + Sync>;
 
 /// A webserver.
 pub struct WebServer {
@@ -203,7 +204,7 @@ impl WebServer {
     /// Add an async function for a URL.
     pub fn url<F: 'static, G: 'static>(mut self, url: &'static str, func: G)
         -> Self
-        where F: Future<Output = ()> + Send, G: Fn(Stream) -> F + Sync + Send
+        where F: Future<Output = Result<(), std::io::Error>> + Send, G: Fn(Stream) -> F + Sync + Send
     {
         self.web.urls.insert(url, ("text/html; charset=utf-8", Box::new(
             move |stream| Box::new(func(stream))
@@ -372,7 +373,9 @@ async fn handle_connection(mut streama: Arc<TcpStream>, web: Arc<Web>) -> AsyncM
                 streamb.push_str(request.0);
                 streamb.push_str("\r\n\r\n");
             }
-            Pin::from(request.1(Stream { internal: Cell::new(Some(streamb)) })).await;
+            Pin::from(request.1(Stream { internal: Cell::new(Some(streamb)) }))
+                .await
+                .unwrap();
         } else if let Ok(contents) = std::fs::read_to_string(page) {
             streamb.push_str("HTTP/1.1 200 OK\nContent-Type: ");
             streamb.push_str("text/html; charset=utf-8");
