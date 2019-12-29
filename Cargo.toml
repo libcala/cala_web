@@ -4,6 +4,12 @@ version = "0.0.1"
 authors = ["Jeron Aldaron Lau <jeronlau@plopgrizzly.com>"]
 edition = "2018"
 
+description = "A webserver library using cala."
+license = "MIT/BSL-1.0"
+documentation = "https://docs.rs/cala-web"
+homepage = "https://libcala.github.io/cala-web"
+repository = "https://github.com/libcala/cala-web"
+
 [dependencies]
 pasts = "0.0"
 async-std = "1.4"
