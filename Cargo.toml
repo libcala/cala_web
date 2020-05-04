@@ -11,5 +11,5 @@ homepage = "https://libcala.github.io/cala-web"
 repository = "https://github.com/libcala/cala-web"
 
 [dependencies]
-pasts = "0.0"
+pasts = "0.1"
 async-std = "1.4"
