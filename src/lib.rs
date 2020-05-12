@@ -7,13 +7,11 @@ use std::task::Context;
 use std::pin::Pin;
 use std::collections::HashMap;
 use std::cell::Cell;
-use std::io::Error;
+use std::io::{Write, Read, Error, ErrorKind};
+use std::net::{TcpListener, TcpStream};
+use std::os::unix::io::AsRawFd;
 
-use pasts;
-use async_std;
-
-use async_std::prelude::*;
-use async_std::net::TcpStream;
+use smelling_salts::{Device, Watcher};
 
 // Asynchronous message for passing between tasks on this thread.
 enum AsyncMsg {
@@ -154,51 +152,39 @@ impl Drop for Thread {
     }
 }
 
-async fn async_main(web: Arc<Web>) {
-    let listener = async_std::net::TcpListener::bind("127.0.0.1:7878")
-        .await
-        .unwrap();
-    let mut threads = vec![];
-    let mut incoming = listener.incoming();
-
-    for _ in 0..4 {
-        threads.push(Thread::new());
-    }
-
-    while let Some(stream) = incoming.next().await {
-        // Select the thread that is the least busy.
-        let mut thread_id = 0;
-        let mut thread_tasks = threads[0].tasks();
-        for id in 1..threads.len() {
-            let n_tasks = threads[id].tasks();
-            if n_tasks < thread_tasks {
-                thread_id = id;
-                thread_tasks = n_tasks;
-            }
-        }
-
-        // Send task to selected thread.
-        let stream = stream.unwrap();
-        let stream = Arc::new(stream);
-        let future = handle_connection(stream, Arc::clone(&web));
-
-        threads[thread_id].send(future);
-    }
-}
-
 type ResourceGenerator = Box<dyn Fn(Stream) -> Box<dyn Future<Output = Result<(), Error>> + Send> + Send + Sync>;
 
 /// A webserver.
 pub struct WebServer {
-    web: Web,
+    web: Arc<Web>,
+    threads: Vec<Thread>,
+    listener: TcpListener,
+    device: Device,
+}
+
+impl Drop for WebServer {
+    fn drop(&mut self) {
+        self.device.old();
+    }
 }
 
 impl WebServer {
     /// Create a new Webserver with a path to the static resources.
-    pub fn with_resources(path: &'static str) -> WebServer {
+    pub fn with_resources(path: &'static str) -> Self {
         let urls = HashMap::new();
 
-        WebServer { web: Web { path, urls } }
+        let listener = TcpListener::bind("127.0.0.1:8080")
+            .unwrap();
+        listener.set_nonblocking(true).expect("Failed to set non-blocking");
+        let mut threads = vec![];
+
+        for _ in 0..4 {
+            threads.push(Thread::new());
+        }
+
+        let device = Device::new(listener.as_raw_fd(), Watcher::new().input());
+
+        WebServer { web: Arc::new(Web { path, urls }), threads, listener, device }
     }
 
     /// Add an async function for a URL.
@@ -206,7 +192,7 @@ impl WebServer {
         -> Self
         where F: Future<Output = Result<(), std::io::Error>> + Send, G: Fn(Stream) -> F + Sync + Send
     {
-        self.web.urls.insert(url, ("text/html; charset=utf-8", Box::new(
+        Arc::get_mut(&mut self.web).unwrap().urls.insert(url, ("text/html; charset=utf-8", Box::new(
             move |stream| Box::new(func(stream))
         )));
         self
@@ -221,23 +207,112 @@ impl WebServer {
         -> Self
         where F: Future<Output = Result<(), std::io::Error>> + Send, G: Fn(Stream) -> F + Sync + Send
     {
-        self.web.urls.insert(url, (content_type, Box::new(
+        Arc::get_mut(&mut self.web).unwrap().urls.insert(url, (content_type, Box::new(
             move |stream| Box::new(func(stream))
         )));
         self
     }
+}
 
-    // FIXME: Maybe return a Future, so it can be interrupted w/ stdin asynchronously
-    /// Start the webserver.
-    pub fn start(self) {
-        let web = Arc::new(self.web);
-        <pasts::ThreadInterrupt as pasts::Interrupt>::block_on(async_main(web));
+impl Future for WebServer {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        match self.listener.accept() {
+            Ok(stream) => {
+                // Select the thread that is the least busy.
+                let mut thread_id = 0;
+                let mut thread_tasks = self.threads[0].tasks();
+                for id in 1..self.threads.len() {
+                    let n_tasks = self.threads[id].tasks();
+                    if n_tasks < thread_tasks {
+                        thread_id = id;
+                        thread_tasks = n_tasks;
+                    }
+                }
+
+                // Send task to selected thread.
+                let stream = stream.0;
+                stream.set_nonblocking(true).expect("Couldn't set unblocking!");
+                let read_device = Device::new(stream.as_raw_fd(), Watcher::new().input());
+                let stream = Arc::new(stream);
+                let future = handle_connection(stream, Arc::clone(&self.web), read_device);
+
+                self.threads[thread_id].send(future);
+
+                self.poll(cx)
+            }
+            Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
+                self.device.register_waker(cx.waker());
+                Poll::Pending
+            }
+            Err(e) => {
+                panic!("I/O ERROR {}!", e)
+            }
+        }
     }
 }
 
 struct Web {
     path: &'static str,
     urls: HashMap<&'static str, (&'static str, ResourceGenerator)>,
+}
+
+struct StreamRead<'a>(&'a mut TcpStream, &'a Device, &'a mut [u8; 512]);
+
+impl Future for StreamRead<'_> {
+    type Output = ();
+    
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        let this = self.get_mut();
+        match this.0.read(this.2) {
+            Ok(bytes) if bytes != 0 => {
+                Poll::Ready(())
+            }
+            Err(ref e) if e.kind() != ErrorKind::WouldBlock => {
+                panic!("Stream Read IO Error {}!", e)
+            }
+            _ => {
+                this.1.register_waker(cx.waker());
+                Poll::Pending
+            }
+        }
+    }
+}
+
+struct StreamWrite<'a>(&'a TcpStream, &'a Device, &'a [u8]);
+
+impl Future for StreamWrite<'_> {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        let this = self.get_mut();
+        match this.0.write(&mut this.2) {
+            Ok(_) => Poll::Ready(()),
+            Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
+                this.1.register_waker(cx.waker());
+                Poll::Pending
+            }
+            Err(e) => panic!("Stream Write IO Error {}!", e),
+        }
+    }
+}
+
+struct StreamFlush<'a>(&'a TcpStream, &'a Device);
+
+impl Future for StreamFlush<'_> {
+    type Output = ();
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        match self.0.flush() {
+            Ok(_) => Poll::Ready(()),
+            Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
+                self.1.register_waker(cx.waker());
+                Poll::Pending
+            }
+            Err(e) => panic!("Stream Write IO Error {}!", e),
+        }
+    }
 }
 
 unsafe impl Sync for Stream {}
@@ -281,7 +356,14 @@ impl Stream {
 
 struct InternalStream {
     stream: Arc<TcpStream>,
+    write_device: Device,
     output: Vec<u8>,
+}
+
+impl Drop for InternalStream {
+    fn drop(&mut self) {
+        self.write_device.old();
+    }
 }
 
 impl InternalStream {
@@ -290,8 +372,8 @@ impl InternalStream {
     pub async fn send(&mut self) -> Result<(), std::io::Error> {
         let stream = Arc::get_mut(&mut self.stream).unwrap();
 
-        stream.write(&self.output).await?;
-        stream.flush().await?;
+        StreamWrite(stream, &self.write_device, &self.output).await;
+        StreamFlush(stream, &self.write_device).await;
 
         Ok(())
     }
@@ -312,13 +394,19 @@ enum Message {
     Terminate,
 }
 
-async fn handle_connection(mut streama: Arc<TcpStream>, web: Arc<Web>) -> AsyncMsg {
+async fn handle_connection(mut streama: Arc<TcpStream>, web: Arc<Web>, mut read_device: Device) -> AsyncMsg {
+    println!("Handle Connection!");
+
     // Should be O.k, only one instance of this Arc.
     let stream = Arc::get_mut(&mut streama).unwrap();
 
     let mut buffer = [0; 512];
-    stream.read(&mut buffer).await.unwrap();
 
+    StreamRead(stream, &read_device, &mut buffer).await;
+    read_device.old();
+    
+    println!("Len: {}", buffer.len());
+    
     // Check for GET header.
     if !buffer.starts_with(b"GET ") {
         // Invalid header (Missing GET)
@@ -344,7 +432,9 @@ async fn handle_connection(mut streama: Arc<TcpStream>, web: Arc<Web>) -> AsyncM
         return AsyncMsg::OldTask;
     }
 
-    let mut streamb = InternalStream { stream: streama, output: vec![] };
+    let write_device = Device::new(streama.as_raw_fd(), Watcher::new().output());
+
+    let mut streamb = InternalStream { stream: streama, output: vec![], write_device };
 
     let path = if let Ok(path) = std::str::from_utf8(path) {
         path
