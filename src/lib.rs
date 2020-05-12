@@ -258,23 +258,30 @@ struct Web {
     urls: HashMap<&'static str, (&'static str, ResourceGenerator)>,
 }
 
-struct StreamRead<'a>(&'a mut TcpStream, &'a Device, &'a mut [u8; 512]);
+struct StreamRead<'a>(&'a mut TcpStream, &'a Device, &'a mut Vec<u8>);
 
 impl Future for StreamRead<'_> {
     type Output = ();
     
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
         let this = self.get_mut();
-        match this.0.read(this.2) {
-            Ok(bytes) if bytes != 0 => {
-                Poll::Ready(())
-            }
-            Err(ref e) if e.kind() != ErrorKind::WouldBlock => {
-                panic!("Stream Read IO Error {}!", e)
-            }
-            _ => {
-                this.1.register_waker(cx.waker());
-                Poll::Pending
+        let mut buffer = [0; 16];
+        loop {
+            match this.0.read(&mut buffer) {
+                Ok(bytes) if bytes != 0 => {
+                    if bytes != 16 {
+                        return Poll::Ready(())
+                    } else {
+                        this.2.extend(&buffer[..bytes]);
+                    }
+                }
+                Err(ref e) if e.kind() != ErrorKind::WouldBlock => {
+                    panic!("Stream Read IO Error {}!", e)
+                }
+                _ => {
+                    this.1.register_waker(cx.waker());
+                    return Poll::Pending
+                }
             }
         }
     }
@@ -400,13 +407,13 @@ async fn handle_connection(mut streama: Arc<TcpStream>, web: Arc<Web>, mut read_
     // Should be O.k, only one instance of this Arc.
     let stream = Arc::get_mut(&mut streama).unwrap();
 
-    let mut buffer = [0; 512];
+    let mut buffer = vec![];
 
     StreamRead(stream, &read_device, &mut buffer).await;
     read_device.old();
-    
+
     println!("Len: {}", buffer.len());
-    
+
     // Check for GET header.
     if !buffer.starts_with(b"GET ") {
         // Invalid header (Missing GET)
