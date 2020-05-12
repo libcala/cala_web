@@ -265,14 +265,13 @@ impl Future for StreamRead<'_> {
     
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
         let this = self.get_mut();
-        let mut buffer = [0; 16];
+        let mut buffer = [0; 512];
         loop {
             match this.0.read(&mut buffer) {
                 Ok(bytes) if bytes != 0 => {
-                    if bytes != 16 {
+                    this.2.extend(&buffer[..bytes]);
+                    if bytes != 512 {
                         return Poll::Ready(())
-                    } else {
-                        this.2.extend(&buffer[..bytes]);
                     }
                 }
                 Err(ref e) if e.kind() != ErrorKind::WouldBlock => {
@@ -402,8 +401,6 @@ enum Message {
 }
 
 async fn handle_connection(mut streama: Arc<TcpStream>, web: Arc<Web>, mut read_device: Device) -> AsyncMsg {
-    println!("Handle Connection!");
-
     // Should be O.k, only one instance of this Arc.
     let stream = Arc::get_mut(&mut streama).unwrap();
 
@@ -411,8 +408,6 @@ async fn handle_connection(mut streama: Arc<TcpStream>, web: Arc<Web>, mut read_
 
     StreamRead(stream, &read_device, &mut buffer).await;
     read_device.old();
-
-    println!("Len: {}", buffer.len());
 
     // Check for GET header.
     if !buffer.starts_with(b"GET ") {
