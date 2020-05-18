@@ -11,6 +11,8 @@ use std::io::{Write, Read, Error, ErrorKind};
 use std::net::{TcpListener, TcpStream};
 use std::os::unix::io::AsRawFd;
 
+use pasts::{CvarExec, prelude::*};
+
 use smelling_salts::{Device, Watcher};
 
 // Asynchronous message for passing between tasks on this thread.
@@ -99,7 +101,9 @@ async fn async_thread_main(recv: Receiver<Message>, num_tasks: Arc<AtomicUsize>)
 
 // A function that represents one of the 4 threads that can run tasks.
 fn thread_main(recv: Receiver<Message>, num_tasks: Arc<AtomicUsize>) {
-    <pasts::ThreadInterrupt as pasts::Interrupt>::block_on(
+    static EXECUTOR: CvarExec = CvarExec::new(); // FIXME: one for each thread
+
+    EXECUTOR.block_on(
         async_thread_main(recv, num_tasks)
     );
 }
