@@ -11,7 +11,7 @@ use std::io::{Write, Read, Error, ErrorKind};
 use std::net::{TcpListener, TcpStream};
 use std::os::unix::io::AsRawFd;
 
-use pasts::{CvarExec, prelude::*};
+use pasts::{prelude::*};
 
 use smelling_salts::{Device, Watcher};
 
@@ -74,17 +74,17 @@ fn async_thread_main_future(recv: Receiver<Message>) -> AsyncMsg {
 async fn async_thread_main(recv: Receiver<Message>, num_tasks: Arc<AtomicUsize>) {
     let mut tasks: Vec<WebserverTask> = vec![];
 
-    tasks.push(Box::new(pasts::spawn_blocking(move ||
+    tasks.push(Box::new(pasts::spawn(move || async {
         async_thread_main_future(recv)
-    )));
+    })));
 
     loop {
         match slice_select(&mut tasks).await {
             // Spawn a new task.
             AsyncMsg::NewTask(recv, task) => {
-                tasks.push(Box::new(pasts::spawn_blocking(move ||
+                tasks.push(Box::new(pasts::spawn(move || async {
                     async_thread_main_future(recv)
-                )));
+                })));
                 tasks.push(task)
             }
             // Reduce task count.
@@ -101,11 +101,9 @@ async fn async_thread_main(recv: Receiver<Message>, num_tasks: Arc<AtomicUsize>)
 
 // A function that represents one of the 4 threads that can run tasks.
 fn thread_main(recv: Receiver<Message>, num_tasks: Arc<AtomicUsize>) {
-    static EXECUTOR: CvarExec = CvarExec::new(); // FIXME: one for each thread
-
-    EXECUTOR.block_on(
+    pasts::spawn(|| async {
         async_thread_main(recv, num_tasks)
-    );
+    });
 }
 
 /// Handle to one of the threads.
