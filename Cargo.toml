@@ -11,6 +11,6 @@ homepage = "https://libcala.github.io/cala-web"
 repository = "https://github.com/libcala/cala-web"
 
 [dependencies]
-smelling_salts = "0.2"
+smelling_salts = "0.6"
 pasts = "0.7"
 num_cpus = "1.0"
